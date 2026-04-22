@@ -1,45 +1,48 @@
 {
-
-"expo": {
-
-"name": "Nexus-Lock",
-
-"slug": "nexus-lock",
-
-"version": "2.1.2",
-
-"orientation": "portrait",
-
-"scheme": "nexuslock",
-
-"userInterfaceStyle":
-
-"dark",
-
-"newArchEnabled": true,
-
-"plugins": [
-
-["expo-audio"],
-
-["expo-local-authentication"]
-
-],
-
-"android": {
-
-"permissions": ["CAMERA",
-
-"RECORD_AUDIO",
-
-"USE_BIOMETRIC",
-
-"FOREGROUND_SERVICE",
-
-"VIBRATE"]
-
-}
-
-}
-
+  "expo": {
+    "name": "NexusLock",
+    "slug": "NexusLock",
+    "version": "2.2.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.nexuslock.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "NexusLock needs the camera for face recognition.",
+        "NSFaceIDUsageDescription": "NexusLock uses Face ID as an alternative unlock method.",
+        "NSLocalNetworkUsageDescription": "Used for Expo development only."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#000000"
+      },
+      "package": "com.nexuslock.app",
+      "permissions": ["android.permission.CAMERA"]
+    },
+    "plugins": [
+      "expo-sqlite",
+      "expo-audio",
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "NexusLock needs the camera for face recognition.",
+          "enableMicrophonePermission": false,
+          "enableFrameProcessors": true
+        }
+      ]
+    ],
+    "extra": {
+      "eas": { "projectId": "your-eas-project-id" }
+    }
+  }
 }
