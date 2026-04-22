@@ -1,7 +1,7 @@
 {
   "name": "nexuslock",
-  "version": "2.1.2",
-  "description": "Nexus-Lock - face-based phone security with on-device FaceNet.",
+  "version": "2.2.0",
+  "description": "Nexus-Lock — face-based phone security with on-device FaceNet.",
   "author": "Nickol Joy Bowman",
   "license": "SEE LICENSE IN LICENSE.txt",
   "main": "index.ts",
@@ -16,28 +16,35 @@
   "dependencies": {
     "@react-navigation/native": "^7.2.2",
     "@react-navigation/native-stack": "^7.14.11",
+
     "expo": "~55.0.0",
     "expo-audio": "~1.1.1",
     "expo-crypto": "~15.0.8",
     "expo-file-system": "~19.0.21",
     "expo-haptics": "~15.0.8",
-    "expo-image-manipulator": "~14.0.8",
     "expo-local-authentication": "~17.0.8",
-    "expo-media-library": "~18.2.1",
     "expo-sqlite": "~15.0.0",
     "expo-status-bar": "~3.0.9",
-    "pako": "^2.1.0",
+
     "react": "19.2.0",
     "react-native": "0.83.2",
+
+    "react-native-vision-camera": "^5.0.0",
+    "react-native-vision-camera-face-detector": "^1.10.0",
     "react-native-fast-tflite": "^3.0.0",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-mmkv": "^2.12.2",
+    "vision-camera-resize-plugin": "^3.2.0",
+
+    "react-native-nitro-modules": "^0.35.0",
+    "react-native-nitro-image": "^0.13.0",
+    "react-native-worklets-core": "^1.6.0",
+    "react-native-worklets": "^0.8.0",
+
     "react-native-reanimated": "~4.1.1",
+    "react-native-gesture-handler": "~2.28.0",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
-    "react-native-vision-camera": "^5.0.0",
-    "react-native-vision-camera-face-detector": "^1.0.0",
-    "vision-camera-resize-plugin": "^1.0.0"
+
+    "react-native-mmkv": "^4.3.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
