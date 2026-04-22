@@ -1,1 +1,45 @@
-{  "expo": {   "name": "Nexus-Lock",   "slug": "nexus-lock",   "version": "2.1.2",   "orientation": "portrait",   "scheme": "nexuslock",   "userInterfaceStyle": "dark",   "newArchEnabled": true,   "plugins": [    ["expo-audio"],    ["expo-local-authentication"]   ],   "android": {    "permissions": ["CAMERA", "RECORD_AUDIO", "USE_BIOMETRIC", "FOREGROUND_SERVICE", "VIBRATE"]   }  } }
+{
+
+"expo": {
+
+"name": "Nexus-Lock",
+
+"slug": "nexus-lock",
+
+"version": "2.1.2",
+
+"orientation": "portrait",
+
+"scheme": "nexuslock",
+
+"userInterfaceStyle":
+
+"dark",
+
+"newArchEnabled": true,
+
+"plugins": [
+
+["expo-audio"],
+
+["expo-local-authentication"]
+
+1,
+
+"android": {
+
+"permissions": ["CAMERA",
+
+"RECORD_AUDIO",
+
+"USE_BIOMETRIC",
+
+"FOREGROUND_SERVICE",
+
+"VIBRATE"]
+
+}
+
+}
+
+}
