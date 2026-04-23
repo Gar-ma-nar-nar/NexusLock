@@ -1,7 +1,19 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- *  Nexus-Lock™ v2.1.2 — Full FaceNet Integration
+ *  Nexus-Lock™ v2.2.0 — Full FaceNet Integration
  *  © 2026 Nickol Joy Bowman. All Rights Reserved.
- * ═══════════════════════════════════════════════════════════════════════════ */
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *  CHANGE LOG (v2.2.0 vs v2.1.2)
+ *  ─────────────────────────────
+ *  • Fixed react-native-mmkv to v4 API (createMMKV instead of new MMKV)
+ *  • Fixed face detector API (useFaceDetector + detectFaces, not scanFaces)
+ *  • Fixed resize plugin API (useResizePlugin hook, scale: { width, height })
+ *  • Fixed babel config (worklets-core/plugin for frame processors)
+ *  • Pre-configured FaceNet model download URL (44 MB, 512-dim)
+ *  • Added react-native-worklets (Reanimated 4.x peer dep)
+ *  • Proper worklets-core bridge for frame processor → JS communication
+ *  • Model auto-downloads on first launch, cached locally after that
+ */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -12,17 +24,25 @@ import * as Haptics from 'expo-haptics';
 import * as Crypto from 'expo-crypto';
 import * as FileSystem from 'expo-file-system';
 import {
-  Camera, useCameraDevice, useCameraPermission, useFrameProcessor,
+  Camera as VisionCamera,
+  useCameraDevice,
+  useCameraPermission,
+  useFrameProcessor,
+  runAsync,
   PhotoFile,
 } from 'react-native-vision-camera';
-import { scanFaces } from 'react-native-vision-camera-face-detector';
+import {
+  Face,
+  useFaceDetector,
+  FaceDetectionOptions,
+} from 'react-native-vision-camera-face-detector';
+import { useResizePlugin } from 'vision-camera-resize-plugin';
 import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
-import { resize } from 'vision-camera-resize-plugin';
 import * as SQLite from 'expo-sqlite';
-import { MMKV } from 'react-native-mmkv';
+import { createMMKV } from 'react-native-mmkv';
+import { Worklets } from 'react-native-worklets-core';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { runOnJS } from 'react-native-reanimated';
 
 /* ─────────────────────────────── Types ──────────────────────────────── */
 
@@ -77,6 +97,18 @@ interface AppContextType {
 
 const EMBEDDING_DIM = 512;
 
+/**
+ * FaceNet model — InceptionResnetV1, 512-dim, FP16 quantized (~44 MB).
+ * Input:  [1, 160, 160, 3] float32, pixels in [-1, 1]
+ * Output: [1, 512] float32, L2-normalized embedding
+ *
+ * Source: https://github.com/shubham0204/OnDevice-Face-Recognition-Android
+ * Backed by the deepface library's FaceNet512 implementation.
+ */
+const MODEL_DOWNLOAD_URL =
+  'https://raw.githubusercontent.com/shubham0204/OnDevice-Face-Recognition-Android/main/app/src/main/assets/facenet_512.tflite';
+const MODEL_FILENAME = 'facenet_512.tflite';
+
 const DEFAULT_SETTINGS: AppSettings = {
   monitoring: false,
   autoUnlock: true,
@@ -93,7 +125,11 @@ const ENROLL_CAPTURE_INTERVAL_MS = 600;   // wait between enrollment captures
 
 /* ─────────────────────────────── Storage ────────────────────────────── */
 
-const mmkv = new MMKV({ id: 'nexuslock-storage' });
+/*
+ * react-native-mmkv v4 uses createMMKV() (Nitro-based).
+ * The old `new MMKV()` constructor from v2 is no longer available.
+ */
+const mmkv = createMMKV({ id: 'nexuslock-storage' });
 const db = SQLite.openDatabaseSync('nexuslock.db');
 
 function initDB(): void {
@@ -173,7 +209,7 @@ async function hashPin(pin: string): Promise<string> {
 /**
  * Singleton FaceNet engine.
  *
- * Model: InceptionResnetV1 (David Sandberg)
+ * Model: InceptionResnetV1 (David Sandberg / deepface)
  * Input:  Float32Array[1 × 160 × 160 × 3]  pixels in [-1, 1]
  * Output: Float32Array[1 × 512]              L2-normalized embedding
  *
@@ -192,9 +228,22 @@ class FaceNetEngine {
     if (this.loading) return false;
     this.loading = true;
     try {
-      // metro bundles .tflite via assetExts config
-      const modelAsset = require('./assets/models/facenet.tflite');
-      this.model = await loadTensorflowModel(modelAsset);
+      const modelDir = FileSystem.documentDirectory + 'models/';
+      const modelPath = modelDir + MODEL_FILENAME;
+
+      // Check if model is already cached locally
+      const info = await FileSystem.getInfoAsync(modelPath);
+      if (!info.exists) {
+        console.log('[FaceNet] Downloading model (~44 MB)...');
+        await FileSystem.makeDirectoryAsync(modelDir, { intermediates: true });
+        const download = await FileSystem.downloadAsync(MODEL_DOWNLOAD_URL, modelPath);
+        console.log(`[FaceNet] Download complete: ${download.status}`);
+      } else {
+        console.log('[FaceNet] Model found in cache');
+      }
+
+      // Load from local file
+      this.model = await loadTensorflowModel({ url: `file://${modelPath}` });
       this._ready = true;
       console.log('[FaceNet] Model loaded successfully');
       return true;
@@ -213,7 +262,6 @@ class FaceNetEngine {
   async embed(rgbBuffer: ArrayBuffer): Promise<Embedding | null> {
     if (!this.model) return null;
     try {
-      // Convert Uint8 RGB → Float32 normalized to [-1, 1]
       const rgb = new Uint8Array(rgbBuffer);
       const expectedLen = 160 * 160 * 3;
       if (rgb.length < expectedLen) {
@@ -221,6 +269,7 @@ class FaceNetEngine {
         return null;
       }
 
+      // Convert Uint8 RGB → Float32 normalized to [-1, 1]
       const input = new Float32Array(expectedLen);
       for (let i = 0; i < expectedLen; i++) {
         input[i] = rgb[i] / 127.5 - 1.0;
@@ -242,6 +291,16 @@ class FaceNetEngine {
 }
 
 const faceNet = new FaceNetEngine();
+
+/* ──────────────────── Face detection options ─────────────────────────── */
+
+const FACE_DETECTION_OPTIONS: FaceDetectionOptions = {
+  performanceMode: 'fast',
+  classificationMode: 'none',
+  landmarkMode: 'none',
+  contourMode: 'none',
+  minFaceSize: 0.15,
+};
 
 /* ──────────────────────── Context + Provider ─────────────────────────── */
 
@@ -359,13 +418,37 @@ function MonitorCanvas() {
   const busyRef    = useRef(false);
   const lastTsRef  = useRef(0);
 
-  // Use refs so frame processor callback always has latest state
+  // Use refs so JS callback always has latest state
   const facesRef    = useRef(faces);
   const settingsRef = useRef(settings);
   useEffect(() => { facesRef.current = faces; }, [faces]);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
 
-  const handleDetection = useCallback(async (rgbBuffer: ArrayBuffer) => {
+  /*
+   * Face detector — useFaceDetector() hook from
+   * react-native-vision-camera-face-detector.
+   * Returns detectFaces (worklet callable) and stopListeners (cleanup).
+   */
+  const faceDetectionOptions = useRef<FaceDetectionOptions>(FACE_DETECTION_OPTIONS).current;
+  const { detectFaces, stopListeners } = useFaceDetector(faceDetectionOptions);
+
+  useEffect(() => {
+    return () => { stopListeners(); };
+  }, [stopListeners]);
+
+  /*
+   * Resize plugin — useResizePlugin() hook from vision-camera-resize-plugin.
+   * Returns a `resize` function callable inside frame processor worklets.
+   */
+  const { resize } = useResizePlugin();
+
+  /*
+   * Bridge: worklet → JS thread.
+   * Worklets.createRunOnJS (from react-native-worklets-core) creates a
+   * function that can be called from within a VisionCamera frame processor
+   * worklet and runs the callback on the JS thread.
+   */
+  const handleDetection = Worklets.createRunOnJS(async (rgbBuffer: ArrayBuffer) => {
     if (busyRef.current) return;
     const now = Date.now();
     if (now - lastTsRef.current < FRAME_MIN_INTERVAL_MS) return;
@@ -397,20 +480,39 @@ function MonitorCanvas() {
     } finally {
       busyRef.current = false;
     }
-  }, [addLog]);
+  });
 
+  /**
+   * Frame processor pipeline:
+   *   1. detectFaces(frame) — ML Kit face detection (native, fast)
+   *   2. If face found → resize to 160×160 RGB uint8 (native, fast)
+   *   3. Send resized buffer to JS thread via Worklets bridge
+   *   4. JS thread: normalize → FaceNet inference → match → log
+   *
+   * Using runAsync so face detection + resize don't block the camera pipeline.
+   */
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
-    try {
-      const detected = scanFaces(frame, { performanceMode: 'fast' });
-      if (detected.length === 0) return;
-      // Resize to 160×160 RGB — matches FaceNet input
-      const resized = resize(frame, { width: 160, height: 160, pixelFormat: 'rgb' });
-      runOnJS(handleDetection)(resized);
-    } catch {
-      // Silently drop frames that fail
-    }
-  }, [handleDetection]);
+    runAsync(frame, () => {
+      'worklet';
+      try {
+        const detected = detectFaces(frame);
+        if (detected.length === 0) return;
+
+        // Resize entire frame to 160×160 RGB (center-crop + scale)
+        const resized = resize(frame, {
+          scale: { width: 160, height: 160 },
+          pixelFormat: 'rgb',
+          dataType: 'uint8',
+        });
+
+        // Send to JS thread for inference
+        handleDetection(resized.buffer);
+      } catch {
+        // Silently drop frames that fail
+      }
+    });
+  }, [detectFaces, resize, handleDetection]);
 
   if (!hasPermission) {
     return (
@@ -427,7 +529,7 @@ function MonitorCanvas() {
   }
 
   return (
-    <Camera
+    <VisionCamera
       device={device}
       frameProcessor={frameProcessor}
       style={StyleSheet.absoluteFill}
@@ -607,17 +709,28 @@ function EnrollScreen({ navigation }: any) {
   const device = useCameraDevice('front');
   const { hasPermission } = useCameraPermission();
   const { addFace, modelReady } = useApp();
-  const cameraRef = useRef<Camera>(null);
+  const cameraRef = useRef<typeof VisionCamera>(null);
 
   const [name, setName]       = useState('');
   const [list, setList]       = useState<FaceList>('trusted');
   const [phase, setPhase]     = useState<'idle' | 'capturing' | 'processing' | 'done'>('idle');
-  const [progress, setProgress] = useState(0); // 0 to ENROLL_CAPTURE_COUNT
+  const [progress, setProgress] = useState(0);
 
   const capturedEmbeddings = useRef<Embedding[]>([]);
   const enrollingRef       = useRef(false);
 
-  const handleEnrollFrame = useCallback(async (rgbBuffer: ArrayBuffer) => {
+  /*
+   * Face detector + resize hooks (same as MonitorCanvas)
+   */
+  const faceDetectionOptions = useRef<FaceDetectionOptions>(FACE_DETECTION_OPTIONS).current;
+  const { detectFaces, stopListeners } = useFaceDetector(faceDetectionOptions);
+  const { resize } = useResizePlugin();
+
+  useEffect(() => {
+    return () => { stopListeners(); };
+  }, [stopListeners]);
+
+  const handleEnrollFrame = Worklets.createRunOnJS(async (rgbBuffer: ArrayBuffer) => {
     if (!enrollingRef.current) return;
     if (capturedEmbeddings.current.length >= ENROLL_CAPTURE_COUNT) return;
 
@@ -639,7 +752,7 @@ function EnrollScreen({ navigation }: any) {
       let photoUri = '';
       try {
         if (cameraRef.current) {
-          const photo: PhotoFile = await cameraRef.current.takePhoto({ flash: 'off' });
+          const photo: PhotoFile = await (cameraRef.current as any).takePhoto({ flash: 'off' });
           photoUri = `file://${photo.path}`;
         }
       } catch (e) {
@@ -664,17 +777,26 @@ function EnrollScreen({ navigation }: any) {
         [{ text: 'OK', onPress: () => navigation.goBack() }],
       );
     }
-  }, [name, list, addFace, navigation]);
+  });
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
-    try {
-      const detected = scanFaces(frame, { performanceMode: 'fast' });
-      if (detected.length === 0) return;
-      const resized = resize(frame, { width: 160, height: 160, pixelFormat: 'rgb' });
-      runOnJS(handleEnrollFrame)(resized);
-    } catch {}
-  }, [handleEnrollFrame]);
+    runAsync(frame, () => {
+      'worklet';
+      try {
+        const detected = detectFaces(frame);
+        if (detected.length === 0) return;
+
+        const resized = resize(frame, {
+          scale: { width: 160, height: 160 },
+          pixelFormat: 'rgb',
+          dataType: 'uint8',
+        });
+
+        handleEnrollFrame(resized.buffer);
+      } catch {}
+    });
+  }, [detectFaces, resize, handleEnrollFrame]);
 
   const startEnrollment = useCallback(() => {
     if (!name.trim()) { Alert.alert('Error', 'Enter a name'); return; }
@@ -701,8 +823,8 @@ function EnrollScreen({ navigation }: any) {
       <View style={{ flex: 1 }}>
         {/* Camera preview */}
         <View style={{ flex: 1, position: 'relative' }}>
-          <Camera
-            ref={cameraRef}
+          <VisionCamera
+            ref={cameraRef as any}
             device={device}
             photo={true}
             frameProcessor={phase === 'capturing' ? frameProcessor : undefined}
